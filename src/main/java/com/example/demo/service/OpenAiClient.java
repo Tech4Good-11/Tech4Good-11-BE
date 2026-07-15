@@ -57,10 +57,38 @@ public class OpenAiClient {
     }
 
     /**
-     * 이미지에서 정보 추출(Vision). instruction 으로 원하는 출력(JSON 등)을 지시한다.
-     * response_format=json_object 로 순수 JSON 응답을 유도한다.
+     * 텍스트 대화 + <b>Structured Outputs</b>. 응답이 schema 를 반드시 따르도록 강제한다(타입 포함).
+     * 모델이 스키마를 벗어난 답을 낼 수 없으므로 호출부에서 방어적 파싱이 필요 없다.
+     *
+     * @param schemaName 스키마 식별용 이름(영문/숫자/언더스코어)
+     * @param schema     JSON Schema. strict 모드 규칙을 따라야 한다
+     *                   (모든 프로퍼티가 required, additionalProperties=false, 선택값은 ["type","null"]).
      */
-    public String extractFromImage(byte[] image, String mimeType, String instruction) {
+    public String chatWithSchema(String systemPrompt, List<ChatMessage> messages,
+                                 String schemaName, ObjectNode schema) {
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("model", model());
+        ArrayNode msgs = body.putArray("messages");
+        if (systemPrompt != null && !systemPrompt.isBlank()) {
+            ObjectNode sys = msgs.addObject();
+            sys.put("role", "system");
+            sys.put("content", systemPrompt);
+        }
+        for (ChatMessage m : messages) {
+            ObjectNode n = msgs.addObject();
+            n.put("role", m.role());
+            n.put("content", m.content());
+        }
+        applyJsonSchema(body, schemaName, schema);
+        return callChatCompletions(body);
+    }
+
+    /**
+     * 이미지에서 정보 추출(Vision) + <b>Structured Outputs</b>.
+     * instruction 은 "무엇을 뽑을지"만 담고, 출력 형태는 schema 가 강제한다.
+     */
+    public String extractFromImage(byte[] image, String mimeType, String instruction,
+                                   String schemaName, ObjectNode schema) {
         String mime = (mimeType == null || mimeType.isBlank()) ? "image/jpeg" : mimeType;
         String dataUrl = "data:" + mime + ";base64," + Base64.getEncoder().encodeToString(image);
 
@@ -81,11 +109,20 @@ public class OpenAiClient {
         ObjectNode imageUrl = imagePart.putObject("image_url");
         imageUrl.put("url", dataUrl);
 
-        ObjectNode responseFormat = body.putObject("response_format");
-        responseFormat.put("type", "json_object");
-
+        applyJsonSchema(body, schemaName, schema);
         return callChatCompletions(body);
     }
+
+    /** response_format 에 strict JSON Schema 를 건다. */
+    private void applyJsonSchema(ObjectNode body, String schemaName, ObjectNode schema) {
+        ObjectNode responseFormat = body.putObject("response_format");
+        responseFormat.put("type", "json_schema");
+        ObjectNode jsonSchema = responseFormat.putObject("json_schema");
+        jsonSchema.put("name", schemaName);
+        jsonSchema.put("strict", true);
+        jsonSchema.set("schema", schema);
+    }
+
 
     // ---- 내부 ----
 
@@ -120,8 +157,16 @@ public class OpenAiClient {
 
         try {
             JsonNode root = objectMapper.readTree(responseJson);
-            JsonNode contentNode = root.path("choices").path(0).path("message").path("content");
-            String text = contentNode.asString();
+            JsonNode message = root.path("choices").path(0).path("message");
+
+            // Structured Outputs 사용 시, 모델이 스키마를 채울 수 없으면 content 대신 refusal 이 온다.
+            JsonNode refusal = message.path("refusal");
+            if (!refusal.isNull() && !refusal.isMissingNode() && !refusal.asString().isBlank()) {
+                log.warn("OpenAI 응답 거부: {}", refusal.asString());
+                throw new BusinessException(ErrorCode.INVALID_INPUT, "요청 내용을 처리할 수 없습니다.");
+            }
+
+            String text = message.path("content").asString();
             if (text == null || text.isBlank()) {
                 throw new BusinessException(ErrorCode.INTERNAL_ERROR, "OpenAI 응답이 비어 있습니다.");
             }

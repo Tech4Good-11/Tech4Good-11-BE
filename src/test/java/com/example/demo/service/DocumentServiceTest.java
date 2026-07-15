@@ -28,6 +28,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.multipart.MultipartFile;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.time.LocalDate;
 import java.util.Optional;
@@ -36,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -82,7 +84,7 @@ class DocumentServiceTest {
     }
 
     private void givenVisionReply(String json) {
-        when(openAiClient.extractFromImage(any(), anyString(), anyString())).thenReturn(json);
+        when(openAiClient.extractFromImage(any(), anyString(), anyString(), anyString(), any())).thenReturn(json);
     }
 
     private void givenConversationSaved() {
@@ -159,7 +161,7 @@ class DocumentServiceTest {
                     .isInstanceOf(BusinessException.class);
 
             // Assert
-            verify(openAiClient, never()).extractFromImage(any(), any(), any());
+            verify(openAiClient, never()).extractFromImage(any(), any(), any(), any(), any());
         }
     }
 
@@ -224,19 +226,25 @@ class DocumentServiceTest {
         }
 
         @Test
-        @DisplayName("코드펜스로 감싼 JSON 도 파싱한다")
-        void should_strip_code_fence_before_parsing() {
+        @DisplayName("응답 형태를 강제하는 strict 스키마로 호출한다")
+        void should_call_vision_with_strict_schema() {
             // Arrange
             givenElder();
-            givenVisionReply("```json\n{\"medications\":[],\"diseases\":[]}\n```");
+            givenVisionReply("{\"medications\":[],\"diseases\":[]}");
             givenConversationSaved();
+            ArgumentCaptor<ObjectNode> schemaCaptor = ArgumentCaptor.forClass(ObjectNode.class);
 
             // Act
-            DocumentIntakeResponse result = documentService.process(USER_ID, ELDER_ID, image(), "prescription");
+            documentService.process(USER_ID, ELDER_ID, image(), "prescription");
 
-            // Assert
-            assertThat(result.extractedMedications()).isEmpty();
-            assertThat(result.extractedDiseases()).isEmpty();
+            // Assert: 프롬프트에 형식을 부탁하는 대신 스키마로 강제해야 한다
+            verify(openAiClient).extractFromImage(any(), any(), anyString(),
+                    eq("document_extraction"), schemaCaptor.capture());
+            ObjectNode schema = schemaCaptor.getValue();
+            assertThat(schema.path("additionalProperties").asBoolean()).isFalse();
+            assertThat(schema.path("properties").path("medications").path("items")
+                    .path("properties").path("intervalHours").path("type").toString())
+                    .isEqualTo("[\"integer\",\"null\"]");
         }
 
         @Test
@@ -273,11 +281,11 @@ class DocumentServiceTest {
         }
 
         @Test
-        @DisplayName("문자열로 온 intervalHours 도 정수로 파싱한다")
-        void should_parse_interval_hours_given_as_string() {
-            // Arrange
+        @DisplayName("intervalHours 를 정수로 저장한다")
+        void should_store_interval_hours_as_integer() {
+            // Arrange: 스키마가 integer 를 강제하므로 모델은 숫자로만 답한다
             givenElder();
-            givenVisionReply("{\"medications\":[{\"medicationName\":\"아스피린\",\"intervalHours\":\"12\"}],\"diseases\":[]}");
+            givenVisionReply("{\"medications\":[{\"medicationName\":\"아스피린\",\"intervalHours\":12}],\"diseases\":[]}");
             when(medicationRepository.save(any(ElderMedication.class))).thenAnswer(i -> i.getArgument(0));
             givenConversationSaved();
 
@@ -461,7 +469,7 @@ class DocumentServiceTest {
                     .isInstanceOf(BusinessException.class)
                     .extracting(e -> ((BusinessException) e).getErrorCode())
                     .isEqualTo(ErrorCode.FORBIDDEN);
-            verify(openAiClient, never()).extractFromImage(any(), any(), any());
+            verify(openAiClient, never()).extractFromImage(any(), any(), any(), any(), any());
         }
     }
 }

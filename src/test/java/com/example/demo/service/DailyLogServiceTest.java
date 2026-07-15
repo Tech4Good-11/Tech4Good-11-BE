@@ -35,6 +35,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -433,7 +434,7 @@ class DailyLogServiceTest {
         }
 
         private void givenLlmReply(String content) {
-            when(openAiClient.chat(anyString(), anyList())).thenReturn(content);
+            when(openAiClient.chatWithSchema(anyString(), anyList(), anyString(), any())).thenReturn(content);
             when(dailyLogRepository.findByElderIdAndLogDate(ELDER_ID, TODAY)).thenReturn(Optional.empty());
         }
 
@@ -456,24 +457,27 @@ class DailyLogServiceTest {
             assertThat(saved.getSourceConversationId()).isEqualTo(50L);
         }
 
-        @ParameterizedTest(name = "코드펜스 응답 파싱: {0}")
-        @ValueSource(strings = {
-                "```json\n{\"exerciseMinutes\": 30}\n```",
-                "```\n{\"exerciseMinutes\": 30}\n```",
-                "  ```json\n{\"exerciseMinutes\": 30}\n```  "
-        })
-        @DisplayName("모델이 코드펜스로 감싼 JSON 도 파싱한다")
-        void should_strip_code_fence_before_parsing(String reply) {
+        @Test
+        @DisplayName("응답 형태를 강제하는 strict 스키마로 호출한다")
+        void should_call_openai_with_strict_schema() {
             // Arrange
             givenElder();
             givenConversation(50L);
-            givenLlmReply(reply);
+            givenLlmReply("{\"sleepHours\": 6.5}");
+            ArgumentCaptor<ObjectNode> schemaCaptor = ArgumentCaptor.forClass(ObjectNode.class);
 
             // Act
             dailyLogService.extractFromConversation(USER_ID, ELDER_ID, 50L);
 
-            // Assert
-            assertThat(captureSavedLog().getValue().getExerciseMinutes()).isEqualTo(30);
+            // Assert: 프롬프트에 형식을 부탁하는 대신 스키마로 강제해야 한다
+            verify(openAiClient).chatWithSchema(anyString(), anyList(),
+                    eq("daily_log_extraction"), schemaCaptor.capture());
+            ObjectNode schema = schemaCaptor.getValue();
+            assertThat(schema.path("additionalProperties").asBoolean()).isFalse();
+            assertThat(schema.path("properties").path("exerciseMinutes").path("type").toString())
+                    .isEqualTo("[\"integer\",\"null\"]");
+            assertThat(schema.path("properties").path("sleepHours").path("type").toString())
+                    .isEqualTo("[\"number\",\"null\"]");
         }
 
         @Test
@@ -532,7 +536,7 @@ class DailyLogServiceTest {
             // Arrange
             givenElder();
             givenConversation(50L);
-            when(openAiClient.chat(anyString(), anyList())).thenReturn("죄송해요, 잘 모르겠어요.");
+            when(openAiClient.chatWithSchema(anyString(), anyList(), anyString(), any())).thenReturn("죄송해요, 잘 모르겠어요.");
 
             // Act & Assert
             assertThatThrownBy(() -> dailyLogService.extractFromConversation(USER_ID, ELDER_ID, 50L))
@@ -614,7 +618,7 @@ class DailyLogServiceTest {
             when(medicationRepository.findByElderIdAndStatus(ELDER_ID, MedicationStatus.active))
                     .thenReturn(List.of(Fixtures.medication(7L, ELDER_ID, "아모디핀정", "C08CA01")));
             when(dailyLogRepository.findByElderIdAndLogDate(ELDER_ID, TODAY)).thenReturn(Optional.empty());
-            when(openAiClient.chat(anyString(), anyList())).thenReturn(
+            when(openAiClient.chatWithSchema(anyString(), anyList(), anyString(), any())).thenReturn(
                     "{\"medicationsTaken\": [{\"medicationName\": \"" + llmMedicationName + "\", \"taken\": true}]}");
         }
 
@@ -649,7 +653,7 @@ class DailyLogServiceTest {
             when(medicationRepository.findByElderIdAndStatus(ELDER_ID, MedicationStatus.active))
                     .thenReturn(List.of(Fixtures.medication(7L, ELDER_ID, "Aspirin", "B01AC06")));
             when(dailyLogRepository.findByElderIdAndLogDate(ELDER_ID, TODAY)).thenReturn(Optional.empty());
-            when(openAiClient.chat(anyString(), anyList())).thenReturn(
+            when(openAiClient.chatWithSchema(anyString(), anyList(), anyString(), any())).thenReturn(
                     "{\"medicationsTaken\": [{\"medicationName\": \"ASPIRIN\", \"taken\": true}]}");
             when(intakeRepository.findByMedicationIdAndIntakeDate(7L, TODAY)).thenReturn(Optional.empty());
 
@@ -682,7 +686,7 @@ class DailyLogServiceTest {
             when(conversationRepository.findById(50L)).thenReturn(Optional.of(
                     Fixtures.conversation(50L, ELDER_ID, ConversationPurpose.free, "[]")));
             when(dailyLogRepository.findByElderIdAndLogDate(ELDER_ID, TODAY)).thenReturn(Optional.empty());
-            when(openAiClient.chat(anyString(), anyList())).thenReturn(
+            when(openAiClient.chatWithSchema(anyString(), anyList(), anyString(), any())).thenReturn(
                     "{\"medicationsTaken\": [{\"medicationName\": \"아모디핀정\", \"taken\": null}]}");
 
             // Act
@@ -709,7 +713,7 @@ class DailyLogServiceTest {
             when(diseaseRepository.findByElderIdAndStatus(ELDER_ID, DiseaseStatus.active))
                     .thenReturn(List.of(disease));
             when(dailyLogRepository.findByElderIdAndLogDate(ELDER_ID, TODAY)).thenReturn(Optional.empty());
-            when(openAiClient.chat(anyString(), anyList())).thenReturn(
+            when(openAiClient.chatWithSchema(anyString(), anyList(), anyString(), any())).thenReturn(
                     "{\"diseaseUpdates\": [{\"diseaseName\": \"고혈압\", \"note\": \"혈압 130/80 으로 안정적\"}]}");
 
             // Act
@@ -733,7 +737,7 @@ class DailyLogServiceTest {
             when(diseaseRepository.findByElderIdAndStatus(ELDER_ID, DiseaseStatus.active))
                     .thenReturn(List.of(disease));
             when(dailyLogRepository.findByElderIdAndLogDate(ELDER_ID, TODAY)).thenReturn(Optional.empty());
-            when(openAiClient.chat(anyString(), anyList())).thenReturn(
+            when(openAiClient.chatWithSchema(anyString(), anyList(), anyString(), any())).thenReturn(
                     "{\"diseaseUpdates\": [{\"diseaseName\": \"고혈압\", \"note\": null}]}");
 
             // Act
@@ -754,7 +758,7 @@ class DailyLogServiceTest {
             // Arrange
             Elder elder = Fixtures.elder(ELDER_ID, "김순자");
             AgentConversation conv = Fixtures.conversation(50L, ELDER_ID, ConversationPurpose.free, "[]");
-            when(openAiClient.chat(anyString(), anyList()))
+            when(openAiClient.chatWithSchema(anyString(), anyList(), anyString(), any()))
                     .thenThrow(new BusinessException(ErrorCode.INTERNAL_ERROR, "OpenAI 통신 오류"));
 
             // Act & Assert
@@ -767,7 +771,7 @@ class DailyLogServiceTest {
             // Arrange
             Elder elder = Fixtures.elder(ELDER_ID, "김순자");
             AgentConversation conv = Fixtures.conversation(50L, ELDER_ID, ConversationPurpose.free, "[]");
-            when(openAiClient.chat(anyString(), anyList())).thenReturn("JSON 아님");
+            when(openAiClient.chatWithSchema(anyString(), anyList(), anyString(), any())).thenReturn("JSON 아님");
 
             // Act & Assert
             assertThatCode(() -> dailyLogService.extractQuietly(elder, conv)).doesNotThrowAnyException();
@@ -779,7 +783,7 @@ class DailyLogServiceTest {
             // Arrange
             Elder elder = Fixtures.elder(ELDER_ID, "김순자");
             AgentConversation conv = Fixtures.conversation(50L, ELDER_ID, ConversationPurpose.free, "[]");
-            when(openAiClient.chat(anyString(), anyList())).thenReturn("{\"sleepHours\": 7}");
+            when(openAiClient.chatWithSchema(anyString(), anyList(), anyString(), any())).thenReturn("{\"sleepHours\": 7}");
             when(dailyLogRepository.findByElderIdAndLogDate(ELDER_ID, TODAY)).thenReturn(Optional.empty());
 
             // Act

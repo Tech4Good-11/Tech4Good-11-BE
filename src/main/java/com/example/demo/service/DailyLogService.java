@@ -2,6 +2,7 @@ package com.example.demo.service;
 
 import com.example.demo.common.BusinessException;
 import com.example.demo.common.ErrorCode;
+import com.example.demo.common.JsonSchemas;
 import com.example.demo.domain.AgentConversation;
 import com.example.demo.domain.Elder;
 import com.example.demo.domain.ElderDailyLog;
@@ -27,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.math.BigDecimal;
@@ -191,9 +193,10 @@ public class DailyLogService {
         diseases.addAll(diseaseRepository.findByElderIdAndStatus(elderId, DiseaseStatus.managed));
 
         String prompt = buildExtractionPrompt(elder.getName(), meds, diseases, conv.getTranscript());
-        String content = openAiClient.chat(
-                "너는 대화 내용에서 사실만 추출하는 분석기다. 반드시 유효한 JSON 만 출력한다.",
-                List.of(new OpenAiClient.ChatMessage("user", prompt)));
+        String content = openAiClient.chatWithSchema(
+                "너는 대화 내용에서 사실만 추출하는 분석기다.",
+                List.of(new OpenAiClient.ChatMessage("user", prompt)),
+                "daily_log_extraction", extractionSchema());
 
         JsonNode extracted = parseJson(content);
         LocalDate today = LocalDate.now();
@@ -243,25 +246,45 @@ public class DailyLogService {
         String diseaseNames = diseases.isEmpty() ? "(없음)"
                 : String.join(", ", diseases.stream().map(ElderDisease::getDiseaseName).toList());
 
+        // 출력 형태(필드·타입·null 허용)는 extractionSchema() 가 강제하므로 여기서는 '무엇을' 뽑을지만 지시한다.
         return "아래는 어르신(" + elderName + ")과 AI 에이전트의 대화 기록(JSON)이다.\n"
-                + "이 대화에서 **명시적으로 언급된 사실만** 추출하여 아래 JSON 형식으로만 답하라(설명 금지).\n\n"
+                + "이 대화에서 **명시적으로 언급된 사실만** 추출하라.\n\n"
                 + "어르신의 복용 약 목록: " + medNames + "\n"
                 + "어르신의 질병 목록: " + diseaseNames + "\n\n"
                 + "대화 기록:\n" + transcript + "\n\n"
-                + "출력 형식:\n"
-                + "{\n"
-                + "  \"sleepHours\": 6.5,\n"
-                + "  \"exerciseMinutes\": 30,\n"
-                + "  \"conditionSummary\": \"한 문장 요약\",\n"
-                + "  \"medicationsTaken\": [ {\"medicationName\": \"위 약 목록 중 하나\", \"taken\": true} ],\n"
-                + "  \"diseaseUpdates\": [ {\"diseaseName\": \"위 질병 목록 중 하나\", \"note\": \"현재 상황 한 줄\"} ]\n"
-                + "}\n"
                 + "규칙:\n"
                 + "- 대화에 언급이 없으면 해당 값은 null, 배열은 빈 배열([]). 절대 추측하지 마라.\n"
-                + "- sleepHours 는 시간 단위 숫자(예: 6.5), exerciseMinutes 는 분 단위 정수(예: 30).\n"
+                + "- sleepHours 는 시간 단위(예: 6.5), exerciseMinutes 는 분 단위(예: 30).\n"
                 + "- 걸음수는 추출하지 마라(대화로 알 수 없음).\n"
                 + "- medicationName/diseaseName 은 반드시 위 목록에 있는 이름을 그대로 사용하라.\n"
                 + "- conditionSummary 는 보호자가 읽을 한국어 한 문장.";
+    }
+
+    /**
+     * 대화 추출 응답 스키마(Structured Outputs, strict).
+     * 모델이 이 형태를 벗어난 응답을 낼 수 없으므로 타입까지 보장된다.
+     * strict 규칙: 모든 프로퍼티가 required, additionalProperties=false, 선택값은 nullable 로 표현.
+     */
+    private ObjectNode extractionSchema() {
+        ObjectNode schema = JsonSchemas.object(objectMapper);
+        schema.putArray("required")
+                .add("sleepHours").add("exerciseMinutes").add("conditionSummary")
+                .add("medicationsTaken").add("diseaseUpdates");
+
+        ObjectNode props = schema.putObject("properties");
+        props.set("sleepHours", JsonSchemas.nullable(objectMapper, "number"));
+        props.set("exerciseMinutes", JsonSchemas.nullable(objectMapper, "integer"));
+        props.set("conditionSummary", JsonSchemas.nullable(objectMapper, "string"));
+
+        props.set("medicationsTaken", JsonSchemas.arrayOf(objectMapper,
+                List.of("medicationName", "taken"),
+                Map.of("medicationName", JsonSchemas.of(objectMapper, "string"),
+                        "taken", JsonSchemas.of(objectMapper, "boolean"))));
+        props.set("diseaseUpdates", JsonSchemas.arrayOf(objectMapper,
+                List.of("diseaseName", "note"),
+                Map.of("diseaseName", JsonSchemas.of(objectMapper, "string"),
+                        "note", JsonSchemas.of(objectMapper, "string"))));
+        return schema;
     }
 
     // ---------- 내부 헬퍼 ----------
@@ -352,13 +375,13 @@ public class DailyLogService {
         }
     }
 
+    /**
+     * 응답은 Structured Outputs 로 스키마가 강제되므로 항상 유효한 JSON 이다.
+     * (코드펜스 제거 같은 방어는 불필요) API 오류 등 예외 상황만 방어한다.
+     */
     private JsonNode parseJson(String content) {
         try {
-            String t = content == null ? "{}" : content.trim();
-            if (t.startsWith("```")) {
-                t = t.replaceFirst("^```[a-zA-Z]*\\s*", "").replaceFirst("\\s*```$", "");
-            }
-            return objectMapper.readTree(t);
+            return objectMapper.readTree(content == null ? "{}" : content);
         } catch (JacksonException e) {
             log.error("대화 추출 결과 JSON 파싱 실패: {}", content, e);
             throw new BusinessException(ErrorCode.INTERNAL_ERROR, "대화 분석 결과를 이해하지 못했습니다.");
@@ -373,6 +396,7 @@ public class DailyLogService {
         return (s == null || s.isBlank()) ? null : s;
     }
 
+    /** 스키마가 integer 를 강제하므로 타입 변환 방어가 필요 없다. */
     private Integer intOrNull(JsonNode n) {
         if (n == null || n.isNull() || n.isMissingNode() || !n.isNumber()) {
             return null;

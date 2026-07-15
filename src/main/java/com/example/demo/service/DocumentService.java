@@ -2,6 +2,7 @@ package com.example.demo.service;
 
 import com.example.demo.common.BusinessException;
 import com.example.demo.common.ErrorCode;
+import com.example.demo.common.JsonSchemas;
 import com.example.demo.domain.AgentConversation;
 import com.example.demo.domain.Elder;
 import com.example.demo.domain.ElderDisease;
@@ -32,6 +33,7 @@ import java.io.IOException;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 진단서/처방전 문서 처리.
@@ -70,10 +72,11 @@ public class DocumentService {
             throw new BusinessException(ErrorCode.INVALID_INPUT, "파일을 읽을 수 없습니다.");
         }
 
-        // 1) Vision 으로 문서 판독 → JSON
+        // 1) Vision 으로 문서 판독 → 스키마가 강제된 JSON
         String docWord = docType.equals("prescription") ? "처방전" : "진단서";
         String instruction = buildInstruction(docWord);
-        String content = openAiClient.extractFromImage(bytes, file.getContentType(), instruction);
+        String content = openAiClient.extractFromImage(bytes, file.getContentType(), instruction,
+                "document_extraction", extractionSchema());
         JsonNode extracted = parseJson(content);
 
         // 2) 추출 결과를 실데이터로 저장
@@ -99,15 +102,44 @@ public class DocumentService {
         );
     }
 
+    /** 출력 형태는 extractionSchema() 가 강제하므로 '무엇을' 뽑을지만 지시한다. */
     private String buildInstruction(String docWord) {
-        return "첨부된 이미지는 한국의 의료 " + docWord + " 사진이다. 내용을 판독하여 아래 JSON 형식으로만 답하라(설명 문장 금지).\n"
-                + "{\n"
-                + "  \"rawText\": \"이미지에서 읽은 핵심 원문 텍스트\",\n"
-                + "  \"medications\": [ {\"medicationName\": \"약품명\", \"atcCode\": null, \"dosage\": \"1정/5mg 등\", \"intervalHours\": 24, \"startDate\": null, \"endDate\": null} ],\n"
-                + "  \"diseases\": [ {\"diseaseName\": \"질병명\", \"icdCode\": null, \"diagnosedAt\": null, \"notes\": null} ]\n"
-                + "}\n"
-                + "규칙: 날짜는 \"YYYY-MM-DD\" 또는 null. intervalHours 는 복용 간격(시간) 정수 또는 null. "
-                + "알 수 없는 값은 null. 해당 항목이 없으면 빈 배열([]). 반드시 유효한 JSON 만 출력한다.";
+        return "첨부된 이미지는 한국의 의료 " + docWord + " 사진이다. 내용을 판독해 처방된 약과 진단된 질병을 추출하라.\n"
+                + "규칙:\n"
+                + "- rawText 에는 이미지에서 읽은 핵심 원문 텍스트를 담아라.\n"
+                + "- 날짜는 \"YYYY-MM-DD\" 형식. intervalHours 는 복용 간격(시간 단위, 예: 24=1일1회).\n"
+                + "- 이미지에서 알 수 없는 값은 null, 해당 항목이 없으면 빈 배열([]). 추측하지 마라.";
+    }
+
+    /**
+     * 문서 판독 응답 스키마(Structured Outputs, strict).
+     * strict 규칙: 모든 프로퍼티가 required, additionalProperties=false, 선택값은 nullable.
+     * (날짜는 JSON 에 날짜 타입이 없어 문자열로 받고 dateOrNull 로 해석한다)
+     */
+    private ObjectNode extractionSchema() {
+        ObjectNode schema = JsonSchemas.object(objectMapper);
+        schema.putArray("required").add("rawText").add("medications").add("diseases");
+
+        ObjectNode props = schema.putObject("properties");
+        props.set("rawText", JsonSchemas.nullable(objectMapper, "string"));
+
+        props.set("medications", JsonSchemas.arrayOf(objectMapper,
+                List.of("medicationName", "atcCode", "dosage", "intervalHours", "startDate", "endDate"),
+                Map.of("medicationName", JsonSchemas.of(objectMapper, "string"),
+                        "atcCode", JsonSchemas.nullable(objectMapper, "string"),
+                        "dosage", JsonSchemas.nullable(objectMapper, "string"),
+                        "intervalHours", JsonSchemas.nullable(objectMapper, "integer"),
+                        "startDate", JsonSchemas.nullable(objectMapper, "string"),
+                        "endDate", JsonSchemas.nullable(objectMapper, "string"))));
+
+        props.set("diseases", JsonSchemas.arrayOf(objectMapper,
+                List.of("diseaseName", "icdCode", "diagnosedAt", "notes"),
+                Map.of("diseaseName", JsonSchemas.of(objectMapper, "string"),
+                        "icdCode", JsonSchemas.nullable(objectMapper, "string"),
+                        "diagnosedAt", JsonSchemas.nullable(objectMapper, "string"),
+                        "notes", JsonSchemas.nullable(objectMapper, "string"))));
+
+        return schema;
     }
 
     private List<MedicationResponse> saveMedications(Long elderId, JsonNode medications) {
@@ -199,25 +231,17 @@ public class DocumentService {
 
     // ---- JSON 파싱 헬퍼 ----
 
+    /**
+     * 응답은 Structured Outputs 로 스키마가 강제되므로 항상 유효한 JSON 이다.
+     * (코드펜스 제거 같은 방어는 불필요) API 오류 등 예외 상황만 방어한다.
+     */
     private JsonNode parseJson(String content) {
         try {
-            return objectMapper.readTree(stripCodeFence(content));
+            return objectMapper.readTree(content == null ? "{}" : content);
         } catch (JacksonException e) {
             log.error("문서 판독 결과 JSON 파싱 실패: {}", content, e);
             throw new BusinessException(ErrorCode.INVALID_INPUT, "문서를 인식하지 못했습니다. 더 선명한 이미지로 다시 시도하세요.");
         }
-    }
-
-    /** 모델이 ```json ... ``` 로 감싸 응답한 경우 대비. */
-    private String stripCodeFence(String s) {
-        if (s == null) {
-            return "{}";
-        }
-        String t = s.trim();
-        if (t.startsWith("```")) {
-            t = t.replaceFirst("^```[a-zA-Z]*\\s*", "").replaceFirst("\\s*```$", "");
-        }
-        return t;
     }
 
     private String text(JsonNode n) {
@@ -228,18 +252,12 @@ public class DocumentService {
         return (s == null || s.isBlank()) ? null : s;
     }
 
+    /** 스키마가 integer 를 강제하므로 타입 변환 방어가 필요 없다. */
     private Integer intOrNull(JsonNode n) {
-        if (n == null || n.isNull() || n.isMissingNode()) {
+        if (n == null || n.isNull() || n.isMissingNode() || !n.isNumber()) {
             return null;
         }
-        if (n.isNumber()) {
-            return n.intValue();
-        }
-        try {
-            return Integer.parseInt(n.asString().trim());
-        } catch (NumberFormatException e) {
-            return null;
-        }
+        return n.intValue();
     }
 
     private LocalDate dateOrNull(JsonNode n) {
