@@ -6,7 +6,7 @@ plugins {
 
 group = 'com.example'
 version = '0.0.1-SNAPSHOT'
-description = 'Tech4Good_11_be'
+description = 'ongi (온기) - 시니어 건강관리 앱 백엔드'
 
 java {
     toolchain {

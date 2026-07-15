@@ -2,13 +2,16 @@ services:
   mysql:
     image: 'mysql:latest'
     environment:
-      - 'MYSQL_DATABASE=mydatabase'
+      - 'MYSQL_DATABASE=ongi'
       - 'MYSQL_PASSWORD=secret'
       - 'MYSQL_ROOT_PASSWORD=verysecret'
       - 'MYSQL_USER=myuser'
+      # 컨테이너 로케일을 UTF-8 로 고정. 미설정 시(POSIX) mysql CLI 가 latin1 로 붙어
+      # 수동 SQL 임포트 시 한글이 이중 인코딩되어 깨진다. 이걸 원천 차단.
+      - 'LANG=C.UTF-8'
     ports:
-      - '3306'
+      - '13306:3306'
   redis:
     image: 'redis:latest'
     ports:
-      - '6379'
+      - '16379:6379'
