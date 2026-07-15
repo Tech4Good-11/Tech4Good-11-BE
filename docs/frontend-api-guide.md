@@ -30,7 +30,8 @@
 | 알림(리마인드) | `GET /elders/{id}/reminders` |
 | 대화 이력 | `GET /elders/{id}/conversations`, `GET /conversations/{id}` |
 | 가족 공유 | `GET/POST/DELETE /elders/{id}/guardians` |
-| **AI 대화(챗봇)** | `POST /elders/{id}/chat` |
+| **AI 대화 — 어르신 모드** | `POST /elders/{id}/chat` (어르신 본인이 말할 때) |
+| **AI 상담 — 자녀 모드** | `POST /elders/{id}/consult` (자녀가 부모님 상태를 물을 때) |
 | **수면/운동 지표** | 대시보드 `dailyLog` (개별: `GET/PUT /elders/{id}/daily-log`) |
 | **복약 체크박스** | `POST /elders/{id}/medication-intake` |
 
@@ -330,7 +331,7 @@ interface MedicationResponse { id: number; medicationName: string; atcCode: stri
 ### 9. Conversations
 
 > ⚠️ **혼동 주의**: 이 그룹은 **완성된 대화를 저장/조회**하는 API다. **AI 응답을 생성하지 않는다.**
-> 챗봇 화면(AI가 답하는 대화)은 **[12. Chat] `POST /elders/{id}/chat`** 을 써야 한다.
+> AI가 답하는 화면은 **[12] `/chat`(어르신) 또는 `/consult`(자녀)** 를 써야 한다.
 
 #### `POST /elders/{elderId}/conversations` — 대화 저장
 ```jsonc
@@ -393,10 +394,23 @@ interface MedicationResponse { id: number; medicationName: string; atcCode: stri
 
 ---
 
-### 12. Chat — 에이전트 챗봇 (OpenAI)
+### 12. Chat / Consult — AI 대화 (OpenAI)
 
-#### `POST /elders/{elderId}/chat` — 에이전트와 대화
-어르신의 질병·복약·건강노트를 컨텍스트로 넣어 '온기' 에이전트가 답변한다.
+> 🔴 **AI 대화는 화면에 따라 API 가 다르다. 절대 섞어 쓰면 안 된다.**
+>
+> | | **`/chat`** | **`/consult`** |
+> |---|---|---|
+> | 누가 말하나 | **어르신 본인** | **자녀(보호자)** |
+> | 쓰는 화면 | 어르신 모드의 대화/안부 | 자녀 모드의 AI 상담 |
+> | AI 말투 | 어르신에게 2인칭 ("옥자님, ...") | 자녀에게 3인칭 ("박옥자님께서는...") |
+> | 대화 저장 | ✅ | ❌ |
+> | 건강지표 추출 | ✅ (자가보고니까) | ❌ |
+>
+> **자녀 화면에서 `/chat` 을 호출하면 안 됩니다.** 이 API 는 발화자를 어르신으로 간주하므로,
+> 자녀의 말이 **어르신 발화로 저장**되고 **어르신의 수면·운동 기록으로 잘못 추출**됩니다.
+
+#### `POST /elders/{elderId}/chat` — 어르신이 AI와 대화 (**어르신 전용**)
+어르신의 질병·복약·건강노트를 컨텍스트로 넣어 '온기' 에이전트가 어르신에게 답한다.
 ```jsonc
 // Request (ChatRequest)
 {
@@ -412,7 +426,35 @@ interface MedicationResponse { id: number; medicationName: string; atcCode: stri
 { "reply": "많이 힘드셨겠어요. 몇 시간 정도 주무셨어요?", "conversationId": 11 }  // save=false면 conversationId=null
 ```
 > `save=true` 로 보내면 대화가 저장되고, **수면·운동·복약·질병 현재상황이 자동 추출**되어 대시보드에 반영된다(추출 실패해도 대화는 정상 응답).
-> ⚠️ 서버에 `OPENAI_API_KEY` 필요(미설정 시 500 + 안내 메시지).
+> 어르신 대화는 `save=true` 로 보내는 것을 권장한다. 그래야 대시보드 지표가 채워진다.
+
+#### `POST /elders/{elderId}/consult` — 자녀가 부모님 상태를 AI와 상담 (**자녀 전용**)
+어르신이 남긴 기록(**최근 대화**·건강노트·질병·복약·수면/운동 추이)을 근거로 AI가 자녀에게 답한다.
+```jsonc
+// Request (ConsultRequest)
+{
+  "message": "어머니가 머리 아프다고 하셨다던데, 제가 뭘 하면 좋을까요?",  // 필수
+  "history": [                                  // 선택: 이전 상담 맥락
+    { "role": "user", "content": "어머니 요즘 어떠세요?" },
+    { "role": "assistant", "content": "박옥자님께서는 최근..." }
+  ]
+}
+// data (ConsultResponse) — 저장하지 않으므로 conversationId 가 없다
+{ "reply": "박옥자님께서는 어제부터 머리가 아프고 4시간밖에 주무시지 못한 상태입니다. 먼저..." }
+```
+> **AI 가 어르신의 실제 대화 기록을 근거로 답한다.** 어르신이 `/chat` 에서 "머리가 아파요" 라고 말한 적이 있으면,
+> 자녀가 물었을 때 그 기록을 참조해 답변한다. 기록에 없는 내용은 지어내지 않는다.
+>
+> ⚠️ **상담은 저장되지 않는다.** 대화 맥락을 이어가려면 프론트가 `history` 로 직접 넘겨야 한다.
+
+```typescript
+interface ChatRequest { message: string; history?: {role: 'user'|'assistant'; content: string}[]; purpose?: ConversationPurpose; save?: boolean; }
+interface ChatResponse { reply: string; conversationId: number | null; }
+interface ConsultRequest { message: string; history?: {role: 'user'|'assistant'; content: string}[]; }
+interface ConsultResponse { reply: string; }
+```
+
+> ⚠️ `/chat`·`/consult` 모두 서버에 `OPENAI_API_KEY` 필요(미설정 시 500 + 안내 메시지).
 
 ---
 
@@ -471,7 +513,9 @@ interface HealthScore { score: number | null; medicationScore: number | null; sl
 7. **⚠️ 걸음수는 제공하지 않는다** — 운동량은 대화 자가보고 기반이라 **`exerciseMinutes`(분)** 만 있다. 걸음수는 대화로 알 수 없어(웨어러블 필요) 스키마에 없다. 화면 문구를 "오늘 운동 30분"으로 잡을 것.
 8. **`healthScore` 는 파생값** — 대화로 얻는 값이 아니라 복약 순응도·수면·운동으로 **서버가 계산**한다. 근거 데이터가 없는 항목은 `null`이고 총점 평균에서 제외되며, 전부 없으면 `score=null`(→ '기록 없음' 표시). 산식: 복약=복용/확인된약, 수면=7시간 기준 1시간당 -25, 운동=30분이면 100.
 9. **`null` = 기록 없음** — `sleepHours`/`exerciseMinutes`/`taken`/`score`가 null이면 "아직 대화나 입력으로 확인되지 않음"이다. 0과 구분할 것(0은 "안 했음"이 확인된 상태).
-10. **OpenAI 필요 API** — `/chat`, `/documents`, `/daily-log/extract` 는 서버에 `OPENAI_API_KEY` 가 있어야 동작. 나머지 API는 키 없이도 정상.
+10. **OpenAI 필요 API** — `/chat`, `/consult`, `/documents`, `/daily-log/extract` 는 서버에 `OPENAI_API_KEY` 가 있어야 동작. 나머지 API는 키 없이도 정상.
+11. **🔴 `/chat` 과 `/consult` 를 섞어 쓰지 말 것** — `/chat` 은 **발화자를 어르신으로 간주**한다. 자녀 화면에서 `/chat` 을 호출하면 자녀의 말이 어르신 발화로 저장되고 **어르신의 수면·운동 기록으로 잘못 추출**되어 대시보드 데이터가 오염된다. 자녀 화면은 반드시 `/consult`. (자세한 비교는 [12] 참고)
+12. **`/consult` 는 저장되지 않는다** — 상담 맥락을 이어가려면 프론트가 `history` 로 이전 대화를 직접 넘겨야 한다. 새로고침하면 상담 내용은 사라진다.
 
 ---
 
