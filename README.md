@@ -62,9 +62,11 @@ API 한 번 호출로 화면이 완성됩니다 — 질병 현황, 오늘 복용
 ## 실행
 
 ```bash
-export OPENAI_API_KEY=sk-...   # AI 기능용 (없어도 서버는 정상 기동)
-./gradlew bootRun              # MySQL·Redis 컨테이너 자동 기동
+echo "OPENAI_API_KEY=sk-..." > .env   # AI 기능용 (없어도 서버는 정상 기동)
+./gradlew bootRun                     # MySQL·Redis 컨테이너 자동 기동
 ```
+
+> `.env` 는 `.gitignore` 대상이라 커밋되지 않습니다. `export OPENAI_API_KEY=...` 로 넣어도 되며, OS 환경변수가 `.env` 보다 우선합니다.
 
 - 앱: `http://localhost:8080`
 - **Swagger UI: http://localhost:8080/swagger-ui.html**

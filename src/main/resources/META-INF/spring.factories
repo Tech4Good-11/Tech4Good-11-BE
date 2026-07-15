@@ -1,0 +1,4 @@
+# .env 파일을 Spring 환경에 주입하는 EnvironmentPostProcessor 등록.
+# 애플리케이션 컨텍스트가 만들어지기 전에 실행되어야 하므로 빈이 아니라 여기서 등록한다.
+org.springframework.boot.EnvironmentPostProcessor=\
+  com.example.demo.config.DotenvEnvironmentPostProcessor

@@ -28,6 +28,9 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.3'
     implementation 'org.springframework.security:spring-security-crypto'
+    // .env 파일 파싱용. Spring 연동은 DotenvEnvironmentPostProcessor 가 직접 한다.
+    // (spring-dotenv 라이브러리는 Spring Boot 4 와 호환되지 않아 사용하지 않는다)
+    implementation 'io.github.cdimascio:dotenv-java:3.0.0'
     compileOnly 'org.projectlombok:lombok'
     developmentOnly 'org.springframework.boot:spring-boot-docker-compose'
     runtimeOnly 'com.h2database:h2'
