@@ -101,7 +101,8 @@ Mockito 로 외부 의존성(DB·OpenAI)을 격리한 **순수 단위 테스트 
 | Auth | 회원가입·로그인·로그아웃 (세션 쿠키) |
 | Elders / Guardians | 어르신 관리, 가족 공유(M:N) |
 | **Dashboard** | **통합 조회 — 상세 화면을 이 API 하나로 구성** |
-| **Chat** | AI 에이전트 대화 (건강 컨텍스트 기반) |
+| **Chat** | 어르신이 AI와 나누는 대화 (발화에서 건강 지표 추출) |
+| **Consult** | 자녀가 부모님 상태를 AI와 상담 (어르신의 기록을 근거로 답변) |
 | **Documents** | 진단서·처방전 사진 → Vision 판독 → 자동 등록 |
 | **DailyLog** | 수면·운동·AI요약·복약 체크 |
 | Diseases / Medications | 질병·복약 실데이터 |
