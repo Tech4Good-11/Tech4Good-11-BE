@@ -38,3 +38,11 @@ out/
 
 ### Agent ###
 .claude/
+
+### Env ###
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+*.env
