@@ -26,10 +26,13 @@
 | 건강정보 탭(질병/복약) | `GET/POST/PUT/DELETE /elders/{id}/diseases`, `.../medications` |
 | 건강노트 | `GET/PUT /elders/{id}/health-note` |
 | 진단서/처방전 업로드 | `POST /elders/{id}/documents` (MOCK) |
-| 안부 확인 | `GET /elders/{id}/checkin/today` → `POST /elders/{id}/checkin` |
+| 안부 확인 / 체크리스트 | `GET /elders/{id}/checkin/today` → `POST /elders/{id}/checkin` |
 | 알림(리마인드) | `GET /elders/{id}/reminders` |
 | 대화 이력 | `GET /elders/{id}/conversations`, `GET /conversations/{id}` |
 | 가족 공유 | `GET/POST/DELETE /elders/{id}/guardians` |
+| **AI 대화(챗봇)** | `POST /elders/{id}/chat` |
+| **수면/운동 지표** | 대시보드 `dailyLog` (개별: `GET/PUT /elders/{id}/daily-log`) |
+| **복약 체크박스** | `POST /elders/{id}/medication-intake` |
 
 ---
 
@@ -198,12 +201,40 @@ type Relationship = 'son'|'daughter'|'spouse'|'sibling'|'relative'|'caregiver'|'
 {
   "elder": { "id": 1, "name": "홍길동", "birthDate": "1945-03-11", "gender": "M" },
   "healthNote": { "contentMd": "## 최근 상태\n- 혈압 안정...", "updatedAt": "2026-07-15T08:00:00" }, // 없으면 null
-  "diseases":    [ /* DiseaseResponse[] */ ],
+  "diseases":    [ /* DiseaseResponse[] : 질병 현재상황 = status + notes */ ],
   "medications": [ /* MedicationResponse[] */ ],
-  "todayReminders": [ /* ElderReminderResponse[] */ ],
-  "recentCheckins": [ { "conversationId": 1, "purpose": "daily_checkin", "createdAt": "2026-07-15T09:00:00", "summary": "약 복용 확인" } ]
+  "todayReminders": [ /* ElderReminderResponse[] : 체크리스트 원천(하드코딩 불필요) */ ],
+  "recentCheckins": [ { "conversationId": 1, "purpose": "daily_checkin", "createdAt": "2026-07-15T09:00:00",
+                        "summary": "산책 30분, 약 복용" } ],   // summary = 대화 AI 요약(없으면 null)
+
+  // ↓↓↓ 대화에서 추출된 오늘 지표 (신규)
+  "dailyLog": {
+    "elderId": 1, "logDate": "2026-07-16",
+    "sleepHours": 6.5,            // 수면시간(시간). null이면 '기록 없음'
+    "exerciseMinutes": 30,        // 운동량(분). ⚠️ 걸음수 아님. null이면 '기록 없음'
+    "conditionSummary": "산책 30분, 약 복용",
+    "checklist": [ { "ruleCode": "HTN_MED_CHECK", "answer": "yes" } ],  // 체크박스 상태 복원용
+    "sourceConversationId": 11, "updatedAt": "2026-07-16T09:10:00"
+  },
+  "todayMedications": [           // 오늘치 복용한 약 (활성 약 전체 + 복용여부)
+    { "medicationId": 1, "medicationName": "암로디핀", "dosage": "5mg 1정",
+      "taken": true,              // null이면 아직 미확인
+      "intakeDate": "2026-07-16" }
+  ],
+  "healthScore": {                // 서버 계산 파생값(게이지바용)
+    "score": 96,                  // 총점 0~100. 근거 없으면 null → '기록 없음'
+    "medicationScore": 100, "sleepScore": 88, "exerciseScore": 100,
+    "comment": "오늘 건강 관리가 잘 되고 있어요."
+  }
 }
 ```
+
+> **프론트 이슈 해결 매핑**
+> - "오늘 운동"/"어젯밤 수면" 하드코딩 → `dailyLog.exerciseMinutes` / `dailyLog.sleepHours` (null이면 '기록 없음')
+> - 체크리스트 하드코딩 → `todayReminders`(질문 목록) + `dailyLog.checklist`(체크 상태)
+> - 체크박스 미연동 → `POST /elders/{id}/checkin` 또는 `POST /elders/{id}/medication-intake`
+> - AI 상담 요약 빈값 → `recentCheckins[].summary` / `dailyLog.conditionSummary`
+> - AI 점수 게이지 하드코딩 → `healthScore.score` (+ 항목별 점수)
 
 ---
 
@@ -350,6 +381,72 @@ interface MedicationResponse { id: number; medicationName: string; atcCode: stri
 
 ---
 
+### 12. Chat — 에이전트 챗봇 (OpenAI)
+
+#### `POST /elders/{elderId}/chat` — 에이전트와 대화
+어르신의 질병·복약·건강노트를 컨텍스트로 넣어 '온기' 에이전트가 답변한다.
+```jsonc
+// Request (ChatRequest)
+{
+  "message": "어젯밤에 잘 못 잤어요",          // 필수
+  "history": [                                  // 선택: 이전 맥락
+    { "role": "user", "content": "안녕하세요" },
+    { "role": "assistant", "content": "안녕하세요, 홍길동님!" }
+  ],
+  "purpose": "free",                            // 선택: daily_checkin | document_intake | free (기본 free)
+  "save": true                                  // 선택: true면 대화 저장 + 지표 자동 추출
+}
+// data (ChatResponse)
+{ "reply": "많이 힘드셨겠어요. 몇 시간 정도 주무셨어요?", "conversationId": 11 }  // save=false면 conversationId=null
+```
+> `save=true` 로 보내면 대화가 저장되고, **수면·운동·복약·질병 현재상황이 자동 추출**되어 대시보드에 반영된다(추출 실패해도 대화는 정상 응답).
+> ⚠️ 서버에 `OPENAI_API_KEY` 필요(미설정 시 500 + 안내 메시지).
+
+---
+
+### 13. DailyLog — 하루 지표 / 복약 체크
+
+#### `GET /elders/{elderId}/daily-log?date=YYYY-MM-DD` — 조회 (date 생략 시 오늘)
+```jsonc
+// data (DailyLogResponse) — 대시보드의 dailyLog 와 동일 구조
+{ "elderId": 1, "logDate": "2026-07-16", "sleepHours": 6.5, "exerciseMinutes": 30,
+  "conditionSummary": "산책 30분, 약 복용",
+  "checklist": [ { "ruleCode": "HTN_MED_CHECK", "answer": "yes" } ],
+  "sourceConversationId": 11, "updatedAt": "2026-07-16T09:10:00" }
+```
+
+#### `PUT /elders/{elderId}/daily-log` — 수동 저장/수정 (부분 수정)
+```jsonc
+// Request — null 필드는 변경 안 함. logDate 생략 시 오늘.
+{ "logDate": null, "sleepHours": 6.5, "exerciseMinutes": 30, "conditionSummary": "산책 30분" }
+// data: DailyLogResponse
+```
+
+#### `POST /elders/{elderId}/daily-log/extract?conversationId=11` — 대화에서 재추출 (OpenAI)
+- `conversationId` 생략 시 최근 대화. 챗봇 `save=true` 면 자동 추출되므로 **보정/재분석용**.
+- `data`: DailyLogResponse. ⚠️ `OPENAI_API_KEY` 필요.
+
+#### `GET /elders/{elderId}/medication-intake?date=` — 오늘치 복용한 약
+```jsonc
+// data: MedicationIntakeResponse[]  (대시보드 todayMedications 와 동일)
+[ { "medicationId": 1, "medicationName": "암로디핀", "dosage": "5mg 1정", "taken": true, "intakeDate": "2026-07-16" } ]
+```
+
+#### `POST /elders/{elderId}/medication-intake` — 복약 체크 (체크박스 연동)
+```jsonc
+// Request — 같은 약/같은 날은 덮어쓰기(upsert)
+{ "medicationId": 1, "taken": true, "intakeDate": null }   // intakeDate 생략 시 오늘
+// data: MedicationIntakeResponse
+```
+
+```typescript
+interface DailyLogResponse { elderId: number; logDate: string; sleepHours: number | null; exerciseMinutes: number | null; conditionSummary: string | null; checklist: {ruleCode: string; answer: 'yes'|'no'}[]; sourceConversationId: number | null; updatedAt: string | null; }
+interface MedicationIntakeResponse { medicationId: number; medicationName: string; dosage: string | null; taken: boolean | null; intakeDate: string; }
+interface HealthScore { score: number | null; medicationScore: number | null; sleepScore: number | null; exerciseScore: number | null; comment: string; }
+```
+
+---
+
 ## D. 구현 현실 주의사항 (프론트가 반드시 알아야 함)
 
 1. **POST 직후 응답의 `createdAt`/`savedAt`가 `null`일 수 있음** — DB엔 정상 저장되나 생성 직후 응답엔 타임스탬프가 안 채워진다. 값이 필요하면 이후 GET(목록/상세)에서 받는다.
@@ -358,6 +455,10 @@ interface MedicationResponse { id: number; medicationName: string; atcCode: stri
 4. **시드 계정 로그인 불가** — `parent1@example.com` 등 시드 유저는 더미 해시라 로그인 안 됨. 테스트는 `signup`으로 새 계정 생성 후 진행.
 5. **transcript는 자유 JSON** — 서버는 형태를 강제하지 않는다. 프론트/에이전트가 `[{role, text|answer}, ...]` 컨벤션을 합의해 사용.
 6. **소유권 403** — 다른 보호자의 elderId로 접근하면 403. elderId는 항상 `GET /elders` 로 받은 것만 사용.
+7. **⚠️ 걸음수는 제공하지 않는다** — 운동량은 대화 자가보고 기반이라 **`exerciseMinutes`(분)** 만 있다. 걸음수는 대화로 알 수 없어(웨어러블 필요) 스키마에 없다. 화면 문구를 "오늘 운동 30분"으로 잡을 것.
+8. **`healthScore` 는 파생값** — 대화로 얻는 값이 아니라 복약 순응도·수면·운동으로 **서버가 계산**한다. 근거 데이터가 없는 항목은 `null`이고 총점 평균에서 제외되며, 전부 없으면 `score=null`(→ '기록 없음' 표시). 산식: 복약=복용/확인된약, 수면=7시간 기준 1시간당 -25, 운동=30분이면 100.
+9. **`null` = 기록 없음** — `sleepHours`/`exerciseMinutes`/`taken`/`score`가 null이면 "아직 대화나 입력으로 확인되지 않음"이다. 0과 구분할 것(0은 "안 했음"이 확인된 상태).
+10. **OpenAI 필요 API** — `/chat`, `/documents`, `/daily-log/extract` 는 서버에 `OPENAI_API_KEY` 가 있어야 동작. 나머지 API는 키 없이도 정상.
 
 ---
 

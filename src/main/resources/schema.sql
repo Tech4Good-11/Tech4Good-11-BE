@@ -23,6 +23,8 @@
 --             다음 재부팅부터 데이터가 보존된다.
 -- =====================================================================
 /*
+DROP TABLE IF EXISTS elder_medication_intake;
+DROP TABLE IF EXISTS elder_daily_log;
 DROP TABLE IF EXISTS guardian_elder;
 DROP TABLE IF EXISTS agent_conversation;
 DROP TABLE IF EXISTS elder_health_note;
@@ -191,3 +193,51 @@ CREATE TABLE IF NOT EXISTS reminder_rule_master (
   UNIQUE KEY uq_rule_code (rule_code),
   KEY idx_rule_match (match_target, match_code, is_active)
 ) ENGINE=InnoDB COMMENT='사전 정의 리마인드 규칙';
+
+-- =====================================================================
+-- 9. elder_daily_log : 하루치 생활 로그 (대화에서 추출 / 수동 입력)
+--    대시보드의 "수면시간 / 운동량 / AI 상담 요약 / 체크리스트" 원천.
+--    * 대화로 알아낼 수 있는 값만 보관한다.
+--      - sleep_hours     : "몇 시간 주무셨어요?" -> 자가보고 가능
+--      - exercise_minutes: "산책 얼마나 하셨어요?" -> 자가보고(분) 가능.
+--                          걸음수는 대화로 알 수 없으므로 보관하지 않는다(웨어러블 필요).
+--    * 어르신 1명당 하루 1행(UNIQUE elder_id + log_date).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS elder_daily_log (
+  id                     BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
+  elder_id               BIGINT UNSIGNED NOT NULL                COMMENT 'FK -> elders.id',
+  log_date               DATE            NOT NULL                COMMENT '기준 날짜(하루 1행). 예: 2026-07-16',
+  sleep_hours            DECIMAL(3,1)    NULL                    COMMENT '수면시간(시간, 대화 자가보고). 예: 6.5. 모르면 NULL',
+  exercise_minutes       INT UNSIGNED    NULL                    COMMENT '운동량(분, 대화 자가보고). 예: 30. 걸음수 아님. 모르면 NULL',
+  condition_summary      VARCHAR(500)    NULL                    COMMENT 'AI 상담 요약(대화 한 줄 요약). 예: "혈압약 복용, 산책 30분"',
+  checklist_answers      JSON            NULL                    COMMENT '체크리스트 응답. 예: {"HTN_MED_CHECK":"yes","HYDRATION_ALL":"no"}',
+  source_conversation_id BIGINT UNSIGNED NULL                    COMMENT '이 값을 채운 대화 id(추적용)',
+  created_at             DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
+  updated_at             DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '수정 시각',
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_daily_log (elder_id, log_date),   -- 어르신당 하루 1행 보장
+  KEY idx_dl_elder_date (elder_id, log_date),
+  CONSTRAINT fk_dl_elder FOREIGN KEY (elder_id) REFERENCES elders(id) ON DELETE CASCADE
+) ENGINE=InnoDB COMMENT='어르신 하루 생활 로그(대화 추출/수동 입력)';
+
+-- =====================================================================
+-- 10. elder_medication_intake : 복약 여부(일자별)
+--     대시보드의 "오늘치 복용한 약" 원천.
+--     대화("약 드셨어요?") 또는 체크리스트 체크로 채워진다.
+--     약 1개당 하루 1행(UNIQUE medication_id + intake_date).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS elder_medication_intake (
+  id                     BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT 'PK',
+  elder_id               BIGINT UNSIGNED NOT NULL                COMMENT 'FK -> elders.id (조회 편의용 비정규화)',
+  medication_id          BIGINT UNSIGNED NOT NULL                COMMENT 'FK -> elder_medication.id',
+  intake_date            DATE            NOT NULL                COMMENT '복용 기준일. 예: 2026-07-16',
+  taken                  TINYINT(1)      NOT NULL DEFAULT 0      COMMENT '복용 여부. 1=복용함, 0=미복용',
+  source_conversation_id BIGINT UNSIGNED NULL                    COMMENT '이 값을 채운 대화 id(추적용). 수동 체크면 NULL',
+  created_at             DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '생성 시각',
+  updated_at             DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '수정 시각',
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_intake (medication_id, intake_date),  -- 약당 하루 1행 보장
+  KEY idx_mi_elder_date (elder_id, intake_date),
+  CONSTRAINT fk_mi_elder FOREIGN KEY (elder_id) REFERENCES elders(id) ON DELETE CASCADE,
+  CONSTRAINT fk_mi_med   FOREIGN KEY (medication_id) REFERENCES elder_medication(id) ON DELETE CASCADE
+) ENGINE=InnoDB COMMENT='어르신 복약 여부(일자별)';

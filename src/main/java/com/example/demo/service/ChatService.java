@@ -38,6 +38,7 @@ public class ChatService {
 
     private final OpenAiClient openAiClient;
     private final OwnershipService ownershipService;
+    private final DailyLogService dailyLogService;
     private final ElderDiseaseRepository diseaseRepository;
     private final ElderMedicationRepository medicationRepository;
     private final ElderHealthNoteRepository healthNoteRepository;
@@ -69,7 +70,11 @@ public class ChatService {
 
         Long conversationId = null;
         if (Boolean.TRUE.equals(request.save())) {
-            conversationId = saveConversation(elderId, request, reply);
+            AgentConversation conv = saveConversation(elderId, request, reply);
+            conversationId = conv.getId();
+            // 저장된 대화에서 오늘의 수면/운동/복약/질병 상황을 추출해 대시보드에 반영.
+            // 실패해도 대화 응답 자체는 성공시킨다.
+            dailyLogService.extractQuietly(elder, conv);
         }
         return new ChatResponse(reply, conversationId);
     }
@@ -110,7 +115,7 @@ public class ChatService {
         return sb.toString();
     }
 
-    private Long saveConversation(Long elderId, ChatRequest request, String reply) {
+    private AgentConversation saveConversation(Long elderId, ChatRequest request, String reply) {
         ArrayNode arr = objectMapper.createArrayNode();
         if (request.history() != null) {
             for (ChatRequest.Turn turn : request.history()) {
@@ -137,11 +142,10 @@ public class ChatService {
         }
 
         ConversationPurpose purpose = request.purpose() != null ? request.purpose() : ConversationPurpose.free;
-        AgentConversation conv = conversationRepository.save(AgentConversation.builder()
+        return conversationRepository.save(AgentConversation.builder()
                 .elderId(elderId)
                 .purpose(purpose)
                 .transcript(json)
                 .build());
-        return conv.getId();
     }
 }

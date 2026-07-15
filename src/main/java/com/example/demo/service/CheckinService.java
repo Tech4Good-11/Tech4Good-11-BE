@@ -29,6 +29,7 @@ public class CheckinService {
     private final ReminderService reminderService;
     private final OwnershipService ownershipService;
     private final AgentConversationRepository conversationRepository;
+    private final DailyLogService dailyLogService;
     private final ObjectMapper objectMapper;
 
     /** 오늘의 문진 항목 = yes_no 응답이 필요한 리마인드 규칙. */
@@ -49,7 +50,7 @@ public class CheckinService {
     /** 문진 응답 제출 → daily_checkin 대화로 저장. */
     @Transactional
     public CheckinSubmitResponse submit(Long userId, Long elderId, CheckinSubmitRequest request) {
-        ownershipService.verify(userId, elderId);
+        Elder elder = ownershipService.verifyAndGetElder(userId, elderId);
         if (request.answers() == null || request.answers().isEmpty()) {
             throw new BusinessException(ErrorCode.INVALID_INPUT, "answers 는 필수입니다.");
         }
@@ -73,7 +74,10 @@ public class CheckinService {
                 .purpose(ConversationPurpose.daily_checkin)
                 .transcript(json)
                 .build());
-        // MOCK: 실제로는 응답 결과로 elder_health_note 를 LLM 이 갱신하나, 여기서는 저장만 수행.
+
+        // 체크리스트 상태 + 복약 여부를 조회 가능한 데이터로 반영(대시보드에서 체크 상태 복원 가능)
+        dailyLogService.applyCheckinAnswers(elderId, elder.getName(), request.answers(), conv.getId());
+
         return new CheckinSubmitResponse(conv.getId(), conv.getCreatedAt());
     }
 }
