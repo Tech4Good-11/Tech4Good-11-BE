@@ -25,7 +25,7 @@
 | 어르신 상세 대시보드 | `GET /elders/{id}/dashboard` ← **한 번에 로드** |
 | 건강정보 탭(질병/복약) | `GET/POST/PUT/DELETE /elders/{id}/diseases`, `.../medications` |
 | 건강노트 | `GET/PUT /elders/{id}/health-note` |
-| 진단서/처방전 업로드 | `POST /elders/{id}/documents` (MOCK) |
+| 진단서/처방전 업로드 | `POST /elders/{id}/documents` (OpenAI Vision 실구현) |
 | 안부 확인 / 체크리스트 | `GET /elders/{id}/checkin/today` → `POST /elders/{id}/checkin` |
 | 알림(리마인드) | `GET /elders/{id}/reminders` |
 | 대화 이력 | `GET /elders/{id}/conversations`, `GET /conversations/{id}` |
@@ -297,11 +297,11 @@ interface MedicationResponse { id: number; medicationName: string; atcCode: stri
 
 ---
 
-### 8. Documents  ⚠️ MOCK
+### 8. Documents  ✅ 실구현 (OpenAI Vision)
 
 #### `POST /elders/{elderId}/documents` — 진단서/처방전 업로드·처리
 - Content-Type: `multipart/form-data`
-  - `file`: 이미지(jpg/png/pdf)
+  - `file`: 이미지(jpg/png 권장)
   - `docType`: `diagnosis` | `prescription`
 ```jsonc
 // data (DocumentIntakeResponse)
@@ -313,7 +313,9 @@ interface MedicationResponse { id: number; medicationName: string; atcCode: stri
   "healthNoteUpdated": true
 }
 ```
-> **현재 MOCK**: 실제 OCR/LLM 없이 docType별 고정 예시를 반환(단 DB엔 실제 저장). 프론트는 응답 결과 표시 후 대시보드/목록을 새로고침.
+> **실제 동작**: 업로드한 이미지를 **OpenAI Vision 으로 판독**해 약품/질병을 추출하고 DB에 실제 등록한다.
+> 결과는 이미지 내용에 따라 달라진다(고정 예시 아님). 프론트는 응답 결과 표시 후 대시보드/목록을 새로고침.
+> ⚠️ 서버에 `OPENAI_API_KEY` 가 있어야 동작(미설정 시 500). 판독 실패 시 400 + "문서를 인식하지 못했습니다".
 > 업로드 예시(axios):
 > ```js
 > const fd = new FormData(); fd.append('file', file); fd.append('docType', 'prescription');
@@ -323,6 +325,9 @@ interface MedicationResponse { id: number; medicationName: string; atcCode: stri
 ---
 
 ### 9. Conversations
+
+> ⚠️ **혼동 주의**: 이 그룹은 **완성된 대화를 저장/조회**하는 API다. **AI 응답을 생성하지 않는다.**
+> 챗봇 화면(AI가 답하는 대화)은 **[12. Chat] `POST /elders/{id}/chat`** 을 써야 한다.
 
 #### `POST /elders/{elderId}/conversations` — 대화 저장
 ```jsonc
@@ -451,7 +456,7 @@ interface HealthScore { score: number | null; medicationScore: number | null; sl
 
 1. **POST 직후 응답의 `createdAt`/`savedAt`가 `null`일 수 있음** — DB엔 정상 저장되나 생성 직후 응답엔 타임스탬프가 안 채워진다. 값이 필요하면 이후 GET(목록/상세)에서 받는다.
 2. **목록은 배열만 반환** — conversations 목록도 `page/size` 파라미터는 받지만 응답 `data`는 **배열**(총개수/페이지 메타 없음). 무한스크롤은 size 기반으로 처리.
-3. **Documents는 MOCK** — 실제 인식 아님. UX는 실제처럼 구성하되 결과가 예시값임을 감안.
+3. **Documents는 실구현(OpenAI Vision)** — 업로드한 이미지를 실제로 판독한다. 인식 실패 시 400이 날 수 있으니 에러 UI를 준비할 것. (`OPENAI_API_KEY` 필요)
 4. **시드 계정 로그인 불가** — `parent1@example.com` 등 시드 유저는 더미 해시라 로그인 안 됨. 테스트는 `signup`으로 새 계정 생성 후 진행.
 5. **transcript는 자유 JSON** — 서버는 형태를 강제하지 않는다. 프론트/에이전트가 `[{role, text|answer}, ...]` 컨벤션을 합의해 사용.
 6. **소유권 403** — 다른 보호자의 elderId로 접근하면 403. elderId는 항상 `GET /elders` 로 받은 것만 사용.

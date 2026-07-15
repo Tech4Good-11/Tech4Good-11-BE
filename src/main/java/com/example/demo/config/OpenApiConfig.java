@@ -26,7 +26,8 @@ public class OpenApiConfig {
                 - **에러 코드(HTTP)**: 400 잘못된 입력 / 401 로그인 필요 / 403 권한 없음(내가 돌보지 않는 어르신) / 404 없음 / 409 중복 / 500 서버오류.
                 - **소유권**: `/api/elders/{elderId}/...` 는 로그인 보호자가 그 어르신을 돌보는 경우에만 접근 가능(아니면 403).
                 - **화면 시작점**: 대부분의 상세 화면은 `GET /api/elders/{elderId}/dashboard` 한 번으로 구성할 수 있다.
-                - 요약에 **(MOCK)** 표기가 있는 엔드포인트는 아직 실제 지능(OCR/LLM) 없이 예시 결과를 반환한다(단, DB 저장은 실제로 동작).
+                - **AI 대화는 `POST /api/elders/{elderId}/chat`** 이다. `POST .../conversations` 는 완성된 대화를 *저장만* 하는 API 이므로 챗봇 화면에서 쓰면 안 된다.
+                - **OpenAI 연동 API**(`/chat`, `/documents`, `/daily-log/extract`)는 서버에 `OPENAI_API_KEY` 환경변수가 있어야 동작한다. 나머지 API 는 키 없이도 정상 동작한다.
                 """;
         return new OpenAPI()
                 .info(new Info()
