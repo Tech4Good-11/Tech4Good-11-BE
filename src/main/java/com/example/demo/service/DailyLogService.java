@@ -326,20 +326,22 @@ public class DailyLogService {
         return x.equalsIgnoreCase(y) || x.contains(y) || y.contains(x);
     }
 
-    private DailyLogResponse toResponse(ElderDailyLog log) {
+    private DailyLogResponse toResponse(ElderDailyLog entity) {
         List<DailyLogResponse.ChecklistAnswer> checklist = new ArrayList<>();
-        if (log.getChecklistAnswers() != null && !log.getChecklistAnswers().isBlank()) {
+        String answers = entity.getChecklistAnswers();
+        if (answers != null && !answers.isBlank()) {
             try {
-                JsonNode node = objectMapper.readTree(log.getChecklistAnswers());
+                JsonNode node = objectMapper.readTree(answers);
                 node.propertyNames().forEach(k ->
                         checklist.add(new DailyLogResponse.ChecklistAnswer(k, node.path(k).asString())));
             } catch (JacksonException e) {
-                log.getChecklistAnswers();
+                log.warn("checklist_answers JSON 파싱 실패: elderId={}, date={}, raw={}",
+                        entity.getElderId(), entity.getLogDate(), answers, e);
             }
         }
         return new DailyLogResponse(
-                log.getElderId(), log.getLogDate(), log.getSleepHours(), log.getExerciseMinutes(),
-                log.getConditionSummary(), checklist, log.getSourceConversationId(), log.getUpdatedAt());
+                entity.getElderId(), entity.getLogDate(), entity.getSleepHours(), entity.getExerciseMinutes(),
+                entity.getConditionSummary(), checklist, entity.getSourceConversationId(), entity.getUpdatedAt());
     }
 
     private String writeJsonQuietly(ObjectNode node) {

@@ -92,11 +92,9 @@ public class ReminderService {
         String code = rule.getMatchCode();
 
         if (target == MatchTarget.all) {
-            // 대상 전체: 질병이나 복약이 하나라도 있으면 적용
-            if (!diseases.isEmpty() || !meds.isEmpty()) {
-                return new ElderReminderResponse.MatchedBy("all", null, null, null);
-            }
-            return null;
+            // 대상 전체: 질병/복약 등록 여부와 무관하게 모든 어르신에게 적용한다.
+            // (물 마시기·식사 같은 기본 생활 리마인드는 약이 없어도 필요하다)
+            return new ElderReminderResponse.MatchedBy("all", null, null, null);
         }
         if (target == MatchTarget.medication) {
             for (ElderMedication m : meds) {

@@ -23,6 +23,7 @@
 --             다음 재부팅부터 데이터가 보존된다.
 -- =====================================================================
 /*
+DROP TABLE IF EXISTS sample;   -- 초기 템플릿 예제 테이블(제거됨). 남아있는 환경 정리용
 DROP TABLE IF EXISTS elder_medication_intake;
 DROP TABLE IF EXISTS elder_daily_log;
 DROP TABLE IF EXISTS guardian_elder;

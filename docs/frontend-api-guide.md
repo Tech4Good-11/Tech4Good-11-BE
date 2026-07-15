@@ -205,7 +205,7 @@ type Relationship = 'son'|'daughter'|'spouse'|'sibling'|'relative'|'caregiver'|'
   "medications": [ /* MedicationResponse[] */ ],
   "todayReminders": [ /* ElderReminderResponse[] : 체크리스트 원천(하드코딩 불필요) */ ],
   "recentCheckins": [ { "conversationId": 1, "purpose": "daily_checkin", "createdAt": "2026-07-15T09:00:00",
-                        "summary": "산책 30분, 약 복용" } ],   // summary = 대화 AI 요약(없으면 null)
+                        "summary": null } ],   // ⚠️ 대부분 null. AI 요약은 아래 dailyLog.conditionSummary 를 쓸 것
 
   // ↓↓↓ 대화에서 추출된 오늘 지표 (신규)
   "dailyLog": {
@@ -231,9 +231,12 @@ type Relationship = 'son'|'daughter'|'spouse'|'sibling'|'relative'|'caregiver'|'
 
 > **프론트 이슈 해결 매핑**
 > - "오늘 운동"/"어젯밤 수면" 하드코딩 → `dailyLog.exerciseMinutes` / `dailyLog.sleepHours` (null이면 '기록 없음')
-> - 체크리스트 하드코딩 → `todayReminders`(질문 목록) + `dailyLog.checklist`(체크 상태)
+> - 체크리스트 하드코딩 → `todayReminders`(질문 목록) + `dailyLog.checklist`(체크 상태).
+>   **약/질병을 아직 등록하지 않은 신규 어르신에게도 기본 항목(물 마시기·식사)이 항상 내려온다** → 로컬 폴백 하드코딩 불필요
 > - 체크박스 미연동 → `POST /elders/{id}/checkin` 또는 `POST /elders/{id}/medication-intake`
-> - AI 상담 요약 빈값 → `recentCheckins[].summary` / `dailyLog.conditionSummary`
+> - AI 상담 요약 빈값 → **`dailyLog.conditionSummary` 를 쓸 것.**
+>   `recentCheckins[].summary` 는 **쓰지 마세요** — 요약은 하루 단위로 저장되는데 그 요약을 만들어낸 대화 1건에만 붙어서,
+>   최신 대화(`recentCheckins[0]`)는 보통 null 입니다.
 > - AI 점수 게이지 하드코딩 → `healthScore.score` (+ 항목별 점수)
 
 ---
@@ -383,6 +386,10 @@ interface MedicationResponse { id: number; medicationName: string; atcCode: stri
     "frequencyType": "daily", "times": ["09:00"], "expectedResponse": "yes_no",
     "matchedBy": { "target": "medication", "code": "C08CA01", "medicationName": "암로디핀", "diseaseName": null } } ]
 ```
+> **매칭 규칙**: `matchedBy.target`
+> - `medication`/`disease` — 어르신의 약(atcCode)·질병(icdCode)이 규칙과 맞을 때만 내려온다.
+> - `all` — **모든 어르신에게 항상 내려온다.** 약/질병을 하나도 등록하지 않은 신규 어르신도 기본 항목
+>   (`HYDRATION_ALL` 물 마시기, `DAILY_MEAL` 식사)을 받는다 → **빈 배열 대비 하드코딩 폴백이 필요 없다.**
 
 ---
 
@@ -456,6 +463,7 @@ interface HealthScore { score: number | null; medicationScore: number | null; sl
 
 1. **POST 직후 응답의 `createdAt`/`savedAt`가 `null`일 수 있음** — DB엔 정상 저장되나 생성 직후 응답엔 타임스탬프가 안 채워진다. 값이 필요하면 이후 GET(목록/상세)에서 받는다.
 2. **목록은 배열만 반환** — conversations 목록도 `page/size` 파라미터는 받지만 응답 `data`는 **배열**(총개수/페이지 메타 없음). 무한스크롤은 size 기반으로 처리.
+2-1. **`recentCheckins[].summary` 는 쓰지 말 것** — 대부분 null 이다. AI 상담 요약은 **`dailyLog.conditionSummary`** 가 정답. (요약은 하루 단위 저장이라 대화 1건에만 연결됨)
 3. **Documents는 실구현(OpenAI Vision)** — 업로드한 이미지를 실제로 판독한다. 인식 실패 시 400이 날 수 있으니 에러 UI를 준비할 것. (`OPENAI_API_KEY` 필요)
 4. **시드 계정 로그인 불가** — `parent1@example.com` 등 시드 유저는 더미 해시라 로그인 안 됨. 테스트는 `signup`으로 새 계정 생성 후 진행.
 5. **transcript는 자유 JSON** — 서버는 형태를 강제하지 않는다. 프론트/에이전트가 `[{role, text|answer}, ...]` 컨벤션을 합의해 사용.
